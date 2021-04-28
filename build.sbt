@@ -5,30 +5,22 @@ name := "chiseltest"
 
 version := "0.5-SNAPSHOT"
 
-scalaVersion := "2.12.13"
+scalaVersion := "2.13.5"
 
-crossScalaVersions := Seq("2.12.13")
+crossScalaVersions := Seq("2.12.13", "2.13.5")
 
-resolvers ++= Seq(
-  Resolver.sonatypeRepo("snapshots"),
-  Resolver.sonatypeRepo("releases")
-)
-
-libraryDependencies ++= Seq(
-  "org.scalatest" %% "scalatest" % "3.2.8",
-  "com.lihaoyi" %% "utest" % "latest.integration"
-)
+resolvers ++= Seq(Resolver.sonatypeRepo("snapshots"), Resolver.sonatypeRepo("releases"))
 
 testFrameworks += new TestFramework("utest.runner.Framework")
 
 publishMavenStyle := true
 
-publishArtifact in Test := false
-pomIncludeRepository := { x => false }
+Test / publishArtifact := false
+pomIncludeRepository   := { x => false }
 
 // scm is set by sbt-ci-release
 pomExtra := (
-<url>http://chisel.eecs.berkeley.edu/</url>
+  <url>http://chisel.eecs.berkeley.edu/</url>
   <licenses>
     <license>
       <name>apache_v2</name>
@@ -55,16 +47,39 @@ publishTo := {
 }
 
 // Provide a managed dependency on X if -DXVersion="" is supplied on the command line.
-val defaultVersions = Seq(
-  "chisel3" -> "3.5-SNAPSHOT",
-  "treadle" -> "1.5-SNAPSHOT"
-)
+val defaultVersions = Map("chisel3" -> "3.5-SNAPSHOT", "treadle" -> "1.5-SNAPSHOT")
 
-libraryDependencies ++= defaultVersions.map { case (dep, ver) =>
-  "edu.berkeley.cs" %% dep % sys.props.getOrElse(dep + "Version", ver) }
+scalacOptions ++= Seq(
+  "-language:reflectiveCalls",
+  "-deprecation",
+  "-feature",
+  "-Xcheckinit",
+  "-Xlint:infer-any",
+  "-Xlint:type-parameter-shadow",
+  "-Yrangepos"
+) ++ {
+  CrossVersion.partialVersion(scalaVersion.value) match {
+    case Some((2, n)) if n >= 13 => Seq("-Ymacro-annotations", "-Wunused")
+    case _                       => Seq("-Ywarn-unused")
+  }
+}
 
-
-scalacOptions ++= Seq("-deprecation", "-feature", "-language:reflectiveCalls")
-
-// Scala 2.12 requires Java 8.
-javacOptions ++= Seq("-source", "1.8", "-target", "1.8")
+libraryDependencies ++= Seq(
+  "edu.berkeley.cs" %% "chisel3"       % defaultVersions("chisel3"),
+  "edu.berkeley.cs" %% "treadle"       % defaultVersions("treadle"),
+  "org.scalatest"   %% "scalatest"     % "3.2.8",
+  "org.scalacheck"  %% "scalacheck"    % "1.15.3",
+  "com.lihaoyi"     %% "utest"         % "0.7.7",
+  "org.scala-lang"   % "scala-reflect" % scalaVersion.value,
+  compilerPlugin("org.scalameta"   % "semanticdb-scalac" % "4.4.15" cross CrossVersion.full),
+  compilerPlugin("edu.berkeley.cs" % "chisel3-plugin"    % defaultVersions("chisel3") cross CrossVersion.full)
+) ++ {
+  CrossVersion.partialVersion(scalaVersion.value) match {
+    case Some((2, n)) if n >= 13 => Nil
+    case _ =>
+      Seq(
+        compilerPlugin("org.scalamacros" % "paradise" % "2.1.1" cross CrossVersion.full)
+        // "org.scala-lang.modules" %% "scala-collection-compat" % "2.4.3"
+      )
+  }
+}
