@@ -364,7 +364,6 @@ private[chiseltest] object verilogToVerilator extends EditableBuildCSimulatorCom
       "-Wno-undefined-bool-conversion",
       "-O1",
       s"-DTOP_TYPE=V$topModule",
-      "-DVL_USER_FINISH",
       s"-include V$topModule.h"
     ) ++ moreVerilatorCFlags
 

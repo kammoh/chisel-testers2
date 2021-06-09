@@ -72,11 +72,16 @@ object VerilatorCppHarnessGenerator {
 #include "verilated_vcd_c.h"
 #endif
 #include <iostream>
-class $dutApiClassName: public sim_api_t<VerilatorDataWrapper*> {
+
+// Legacy function required only so linking works on Cygwin, MSVC++, and macOS
+double sc_time_stamp() { return 0; }
+
+#define HALF_PERIOD 5
+class DutApi: public sim_api_t<VerilatorDataWrapper*> {
     public:
-    $dutApiClassName($dutVerilatorClassName* _dut) {
+    DutApi($dutVerilatorClassName* _dut) {
         dut = _dut;
-        main_time = 0L;
+        contextp = _dut->contextp();
         is_exit = false;
 #if VM_TRACE
         tfp = NULL;
@@ -101,19 +106,16 @@ class $dutApiClassName: public sim_api_t<VerilatorDataWrapper*> {
       s"""        sim_data.signal_map["${dut.reset.pathName}"] = 0;
     }
 #if VM_TRACE
-     void init_dump(VerilatedVcdC* _tfp) { tfp = _tfp; }
+    void init_dump(VerilatedVcdC* _tfp) { tfp = _tfp; }
 #endif
-    inline bool exit() { return is_exit; }
-
-    // required for sc_time_stamp()
-    virtual inline double get_time_stamp() {
-        return main_time;
+    inline bool exit() {
+        return contextp->gotFinish() || is_exit;
     }
 
     private:
     $dutVerilatorClassName* dut;
+    VerilatedContext* contextp;
     bool is_exit;
-    vluint64_t main_time;
 #if VM_TRACE
     VerilatedVcdC* tfp;
 #endif
@@ -137,80 +139,68 @@ class $dutApiClassName: public sim_api_t<VerilatorDataWrapper*> {
         dut->eval();
         is_exit = true;
     }
+    inline void half_step(bool rising) {
+        dut->clock = rising;
+        dut->eval();
+#if VM_TRACE
+        tfp->dump(contextp->time());
+#endif
+        contextp->timeInc(HALF_PERIOD);
+    }
     virtual inline void step() {
-        dut->clock = 0;
-        dut->eval();
-#if VM_TRACE
-        if (tfp) tfp->dump(main_time);
-#endif
-        main_time++;
-        dut->clock = 1;
-        dut->eval();
-#if VM_TRACE
-        if (tfp) tfp->dump(main_time);
-#endif
-        main_time++;
+        half_step(0);
+        half_step(1);
     }
     virtual inline void update() {
-        // This seems to force a full eval of circuit, so registers with alternate clocks are update correctly
         dut->eval();
-        // This was the original call, did not refresh registers when some  other clock transitioned
-        // dut->_eval_settle(dut->__VlSymsp);
     }
 };
 
-// The following isn't strictly required unless we emit (possibly indirectly) something
-// requiring a time-stamp (such as an assert).
-static $dutApiClassName * _Top_api;
-double sc_time_stamp () { return _Top_api->get_time_stamp(); }
-
-// Override Verilator definition so first $$finish ends simulation
-// Note: VL_USER_FINISH needs to be defined when compiling Verilator code
-void vl_finish(const char* filename, int linenum, const char* hier) {
-  $verilatorRunFlushCallback
-  exit(0);
-}
-
 int main(int argc, char **argv, char **env) {
-    Verilated::commandArgs(argc, argv);
-    $dutVerilatorClassName* top = new $dutVerilatorClassName;
-    std::string vcdfile = "$vcdFilePath";
-    std::vector<std::string> args(argv+1, argv+argc);
-    std::vector<std::string>::const_iterator it;
-    for (it = args.begin() ; it != args.end() ; it++) {
-        if (it->find("+waveform=") == 0) vcdfile = it->c_str()+10;
-    }
+    VerilatedContext* contextp = new VerilatedContext;
+    contextp->debug(0);
+    contextp->randReset(2);
+    contextp->commandArgs(argc, argv);
+    $dutVerilatorClassName* top = new $dutVerilatorClassName{contextp, "TOP"};
 #if VM_COVERAGE
-    $coverageInit
+    contextp->coveragep()->forcePerInstance(true);
 #endif
 #if VM_TRACE || VM_COVERAGE
-    Verilated::traceEverOn(true);
+    contextp->traceEverOn(true);
 #endif
 #if VM_TRACE
-    VL_PRINTF(\"Enabling waves..\");
+    VL_PRINTF("Enabling waves..\\n");
     VerilatedVcdC* tfp = new VerilatedVcdC;
     top->trace(tfp, 99);
-    tfp->open(vcdfile.c_str());
+    tfp->open("$vcdFilePath");
 #endif
-    $dutApiClassName api(top);
-    _Top_api = &api; /* required for sc_time_stamp() */
+    DutApi api(top);
     api.init_sim_data();
     api.init_channels();
 #if VM_TRACE
     api.init_dump(tfp);
 #endif
-    while(!api.exit()) api.tick();
+    while(!api.exit()) {
+      api.tick();
+    }
+    top->final();
 #if VM_TRACE
-    if (tfp) tfp->close();
+    tfp->flush();
+    tfp->close();
     delete tfp;
+    tfp = nullptr;
 #endif
 #if VM_COVERAGE
-    VL_PRINTF(\"Writing Coverage..\");
+    VL_PRINTF("Writing Coverage..\\n");
     Verilated::mkdir("$targetDir/logs");
-    VerilatedCov::write("$targetDir/logs/coverage.dat");
+    contextp->coveragep()->write("$targetDir/logs/coverage.dat");
 #endif
     delete top;
-    exit(0);
+    top = nullptr;
+    delete contextp;
+    contextp = nullptr;
+
+    return 0;
 }
 """
     )
